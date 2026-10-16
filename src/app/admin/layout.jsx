@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAdminAuth } from '../../context/AdminAuthContext';
 import AdminSidebar from '../../components/admin/AdminSidebar';
+import AdminSessionTimeout from '../../components/admin/AdminSessionTimeout';
 import { Loader2, Menu, X, LogOut, ShieldCheck, Coffee } from 'lucide-react';
 
 export default function AdminLayout({ children }) {
@@ -63,7 +64,9 @@ export default function AdminLayout({ children }) {
   };
 
   return (
-    <div className="min-h-screen bg-[#0E0704] text-cream-soft flex flex-col lg:flex-row">
+    <div className="min-h-screen bg-[#0E0704] text-cream-soft flex flex-col lg:flex-row relative">
+      {/* 10-Minute Inactivity Session Monitor & Warning Modal */}
+      <AdminSessionTimeout />
       
       {/* Mobile Top Header Bar (< lg) */}
       <header className="lg:hidden sticky top-0 z-40 bg-[#120A06]/95 backdrop-blur-md border-b border-amber-900/30 px-4 py-3 flex items-center justify-between">

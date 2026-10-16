@@ -1,21 +1,36 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminAuth } from '../../../context/AdminAuthContext';
-import { Lock, Mail, ArrowRight, ShieldCheck, Sparkles, AlertCircle, Loader2 } from 'lucide-react';
+import { Lock, Mail, ArrowRight, ShieldCheck, Sparkles, AlertCircle, Loader2, Clock } from 'lucide-react';
 
 export default function AdminLoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
+  const [inactivityNotice, setInactivityNotice] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { login, loginDemo } = useAdminAuth();
   const router = useRouter();
 
+  useEffect(() => {
+    try {
+      const reason = window.sessionStorage.getItem('darik_admin_logout_reason');
+      const params = new URLSearchParams(window.location.search);
+      if (reason === 'inactivity' || params.get('reason') === 'inactivity') {
+        setInactivityNotice(true);
+        window.sessionStorage.removeItem('darik_admin_logout_reason');
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, []);
+
   const handleLogin = async (e) => {
     e.preventDefault();
     setError(null);
+    setInactivityNotice(false);
     setIsSubmitting(true);
 
     try {
@@ -68,6 +83,21 @@ export default function AdminLoginPage() {
             </div>
           </div>
         </div>
+
+        {/* Inactivity Logout Notice */}
+        {inactivityNotice && (
+          <div className="mb-6 p-4 rounded-2xl bg-amber-500/15 border border-amber-500/40 text-xs text-amber-200 flex items-start gap-3 animate-fadeIn">
+            <Clock className="w-4 h-4 text-darik-400 flex-shrink-0 mt-0.5" />
+            <div>
+              <div className="font-serif font-bold text-cream-soft uppercase tracking-wider text-[11px] mb-0.5">
+                Session Auto-Logged Out
+              </div>
+              <div className="text-cream-muted/90 text-[11px] leading-relaxed">
+                Your session was ended after 10 minutes of inactivity to protect your roastery data. Please sign in again.
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Error Alert */}
         {error && (
@@ -145,8 +175,15 @@ export default function AdminLoginPage() {
           </button>
         </div>
 
+        {/* Session Security Policy Note */}
+        <div className="mt-5 pt-3 border-t border-white/5 text-center">
+          <p className="text-[10px] text-cream-muted/50 tracking-wider uppercase font-medium">
+            Protected Session: Tab-Scoped • 10m Inactivity Auto-Logout
+          </p>
+        </div>
+
         {/* Return to storefront */}
-        <div className="mt-6 text-center">
+        <div className="mt-4 text-center">
           <a
             href="/"
             className="text-xs text-cream-muted/70 hover:text-darik-300 transition-colors"

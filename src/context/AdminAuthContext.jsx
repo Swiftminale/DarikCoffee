@@ -6,39 +6,110 @@ import { useRouter } from 'next/navigation';
 
 const AdminAuthContext = createContext();
 
+// Inactivity configuration: 10 minutes session timeout
+export const ADMIN_INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+export const ADMIN_WARNING_BEFORE_TIMEOUT_MS = 60 * 1000;  // 1 minute warning modal
+
 export function AdminAuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const isDemoMode = !isSupabaseConfigured();
 
-  useEffect(() => {
-    // Check local session first (for demo or stored auth)
+  // Helper to record activity timestamp in sessionStorage
+  const recordActivity = () => {
     try {
-      const stored = localStorage.getItem('darik_admin_session');
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.setItem('darik_admin_last_activity', Date.now().toString());
+      }
+    } catch (e) {
+      // ignore
+    }
+  };
+
+  // Helper to check if current session has exceeded 10m inactivity
+  const isSessionExpiredDueToInactivity = () => {
+    try {
+      if (typeof window === 'undefined') return false;
+      const lastActivity = window.sessionStorage.getItem('darik_admin_last_activity');
+      if (!lastActivity) return false;
+      return Date.now() - parseInt(lastActivity, 10) >= ADMIN_INACTIVITY_TIMEOUT_MS;
+    } catch {
+      return false;
+    }
+  };
+
+  useEffect(() => {
+    // 1. Purge any legacy localStorage session tokens so closing tabs enforces logout
+    try {
+      localStorage.removeItem('darik_admin_session');
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith('sb-') || key.includes('auth-token'))) {
+          localStorage.removeItem(key);
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    // 2. Check if inactivity timeout has elapsed while tab was backgrounded or asleep
+    if (isSessionExpiredDueToInactivity()) {
+      try {
+        sessionStorage.removeItem('darik_admin_session');
+        sessionStorage.removeItem('darik_admin_last_activity');
+        sessionStorage.setItem('darik_admin_logout_reason', 'inactivity');
+      } catch (e) {}
+      setUser(null);
+      setSession(null);
+      setLoading(false);
+      return;
+    }
+
+    // 3. Check sessionStorage (strictly active for this browser tab only)
+    try {
+      const stored = sessionStorage.getItem('darik_admin_session');
       if (stored) {
         const parsed = JSON.parse(stored);
         setUser(parsed.user);
         setSession(parsed);
+        // Refresh activity timestamp if not set
+        if (!sessionStorage.getItem('darik_admin_last_activity')) {
+          recordActivity();
+        }
       }
     } catch (e) {
-      console.warn('Local session read error', e);
+      console.warn('Session read error', e);
     }
 
-    // If Supabase is configured, listen to real auth changes
+    // 4. If Supabase is configured, listen to real auth changes (stored in sessionStorage)
     if (isSupabaseConfigured() && supabase) {
       supabase.auth.getSession().then(({ data: { session: supaSession } }) => {
         if (supaSession) {
+          if (isSessionExpiredDueToInactivity()) {
+            logout('inactivity');
+            return;
+          }
           setSession(supaSession);
           setUser(supaSession.user ?? null);
+          if (!sessionStorage.getItem('darik_admin_last_activity')) {
+            recordActivity();
+          }
         }
         setLoading(false);
       }).catch(() => setLoading(false));
 
       const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, supaSession) => {
         if (supaSession) {
+          if (isSessionExpiredDueToInactivity()) {
+            logout('inactivity');
+            return;
+          }
           setSession(supaSession);
           setUser(supaSession.user ?? null);
+        } else {
+          setSession(null);
+          setUser(null);
         }
         setLoading(false);
       });
@@ -49,7 +120,7 @@ export function AdminAuthProvider({ children }) {
     }
   }, []);
 
-  // Quick Demo Login bypass (works anytime)
+  // Quick Demo Login bypass (works anytime, saved to sessionStorage for tab-only session)
   const loginDemo = () => {
     const demoUser = {
       id: 'demo-admin-id',
@@ -59,7 +130,14 @@ export function AdminAuthProvider({ children }) {
     const demoSession = { user: demoUser, access_token: 'demo-token' };
     setUser(demoUser);
     setSession(demoSession);
-    localStorage.setItem('darik_admin_session', JSON.stringify(demoSession));
+    try {
+      sessionStorage.setItem('darik_admin_session', JSON.stringify(demoSession));
+      sessionStorage.setItem('darik_admin_last_activity', Date.now().toString());
+      sessionStorage.removeItem('darik_admin_logout_reason');
+      localStorage.removeItem('darik_admin_session');
+    } catch (e) {
+      console.warn('Could not write to sessionStorage', e);
+    }
     return { user: demoUser, session: demoSession };
   };
 
@@ -86,6 +164,10 @@ export function AdminAuthProvider({ children }) {
         }
         setUser(data.user);
         setSession(data.session);
+        try {
+          sessionStorage.setItem('darik_admin_last_activity', Date.now().toString());
+          sessionStorage.removeItem('darik_admin_logout_reason');
+        } catch (e) {}
         return data;
       } catch (err) {
         throw err;
@@ -116,13 +198,27 @@ export function AdminAuthProvider({ children }) {
       if (data.session) {
         setUser(data.user);
         setSession(data.session);
+        recordActivity();
       }
       return data;
     }
     throw new Error('Supabase is not configured for registration.');
   };
 
-  const logout = async () => {
+  const logout = async (reason = null) => {
+    try {
+      if (reason) {
+        sessionStorage.setItem('darik_admin_logout_reason', reason);
+      } else {
+        sessionStorage.removeItem('darik_admin_logout_reason');
+      }
+      sessionStorage.removeItem('darik_admin_session');
+      sessionStorage.removeItem('darik_admin_last_activity');
+      localStorage.removeItem('darik_admin_session');
+    } catch (e) {
+      // ignore
+    }
+
     if (isSupabaseConfigured() && supabase) {
       try {
         await supabase.auth.signOut();
@@ -132,11 +228,6 @@ export function AdminAuthProvider({ children }) {
     }
     setUser(null);
     setSession(null);
-    try {
-      localStorage.removeItem('darik_admin_session');
-    } catch (e) {
-      // ignore
-    }
   };
 
   return (
@@ -151,6 +242,7 @@ export function AdminAuthProvider({ children }) {
         loginDemo,
         signUp,
         logout,
+        recordActivity,
       }}
     >
       {children}
